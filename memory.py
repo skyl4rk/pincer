@@ -1,0 +1,568 @@
+# memory.py — Vector memory store
+#
+# Stores conversation history and long-term memories in SQLite.
+# Uses sqlite-vec for fast KNN vector search and fastembed for local embeddings.
+#
+# Graceful fallbacks:
+#   - fastembed unavailable  → full-text search (SQLite FTS5)
+#   - sqlite-vec unavailable → numpy cosine similarity over stored BLOBs
+#   - numpy unavailable      → full-text search only
+#
+# Public API:
+#   init()                         — create tables, call once at startup
+#   store_memory(content, ...)     — embed and store a long-term memory
+#   store_conversation(role, text) — append a conversation turn
+#   get_recent(n)                  — last n conversation turns
+#   search(query, n)               — semantic (or FTS) search
+#   get_notes(project, query, n)   — retrieve project notes, optionally by theme
+#   get_note_projects()            — list all projects that have notes
+#   ingest_url(url)                — fetch, chunk, embed, and store a web page
+#   ingest_pdf(path)               — extract, chunk, embed, and store a PDF
+
+import sqlite3
+import struct
+from pathlib import Path
+from typing import Optional
+
+DB_PATH       = Path(__file__).parent / "data" / "memory.db"
+EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5 produces 384-dimensional vectors
+
+# ---------------------------------------------------------------------------
+# Optional dependency: fastembed
+# ---------------------------------------------------------------------------
+try:
+    # Suppress onnxruntime's GPU discovery warning on devices without a GPU
+    # (e.g. Raspberry Pi). This is cosmetic — onnxruntime falls back to CPU fine.
+    import os as _os
+    _os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
+
+    from fastembed import TextEmbedding as _TextEmbedding
+    _embed_model = _TextEmbedding("BAAI/bge-small-en-v1.5")
+    EMBEDDINGS_AVAILABLE = True
+    print("[memory] fastembed loaded — using BAAI/bge-small-en-v1.5")
+except Exception:
+    EMBEDDINGS_AVAILABLE = False
+    print("[memory] fastembed not available — falling back to full-text search")
+
+# ---------------------------------------------------------------------------
+# Optional dependency: sqlite-vec
+# ---------------------------------------------------------------------------
+try:
+    import sqlite_vec as _sqlite_vec
+    # Test-load the native extension now rather than at first use.
+    # Catches architecture mismatches (e.g. ELFCLASS32 on a 64-bit Python)
+    # that only surface when the .so is actually loaded, not on import.
+    _test = sqlite3.connect(":memory:")
+    _test.enable_load_extension(True)
+    _sqlite_vec.load(_test)
+    _test.enable_load_extension(False)
+    _test.close()
+    SQLITE_VEC_AVAILABLE = True
+    print("[memory] sqlite-vec loaded — using KNN vector search")
+except Exception as e:
+    SQLITE_VEC_AVAILABLE = False
+    _reason = "binary architecture mismatch" if "ELF" in str(e) else str(e)
+    print(f"[memory] sqlite-vec unavailable ({_reason}) — using numpy cosine similarity")
+
+# ---------------------------------------------------------------------------
+# Optional dependency: numpy (only needed if sqlite-vec is absent)
+# ---------------------------------------------------------------------------
+NUMPY_AVAILABLE = False
+if EMBEDDINGS_AVAILABLE and not SQLITE_VEC_AVAILABLE:
+    try:
+        import numpy as _np
+        NUMPY_AVAILABLE = True
+    except ImportError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Database connection
+# ---------------------------------------------------------------------------
+
+def _connect() -> sqlite3.Connection:
+    """Open the database and load sqlite-vec extension if available."""
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # WAL mode allows concurrent reads and writes from multiple threads
+    # without blocking, which matters because Telegram, email, and the
+    # scheduler all call memory functions simultaneously.
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    if SQLITE_VEC_AVAILABLE:
+        conn.enable_load_extension(True)
+        _sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Initialisation
+# ---------------------------------------------------------------------------
+
+def init() -> None:
+    """
+    Create all required tables if they don't already exist.
+    Call this once at agent startup.
+    """
+    conn = _connect()
+
+    # Main memory store — text and metadata
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            content   TEXT    NOT NULL,
+            role      TEXT    DEFAULT 'note',
+            source    TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # FTS5 full-text search index (used as fallback when embeddings unavailable)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+        USING fts5(content, content='memories', content_rowid='id')
+    """)
+
+    # KNN vector table (only created if sqlite-vec is available)
+    if SQLITE_VEC_AVAILABLE:
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
+            USING vec0(embedding float[{EMBEDDING_DIM}])
+        """)
+
+    # If using numpy fallback, add an embedding BLOB column to the memories table
+    if EMBEDDINGS_AVAILABLE and not SQLITE_VEC_AVAILABLE:
+        existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(memories)")]
+        if "embedding" not in existing_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
+
+    # Conversation history — recent turns fed into every LLM call
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversation (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            role      TEXT    NOT NULL,
+            content   TEXT    NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Prune conversation table — keep only the most recent 1000 turns.
+    # get_recent() only reads the last 15, so older rows are never used.
+    conn.execute("""
+        DELETE FROM conversation WHERE id NOT IN (
+            SELECT id FROM conversation ORDER BY id DESC LIMIT 1000
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Embedding helpers
+# ---------------------------------------------------------------------------
+
+def _embed(text: str) -> Optional[list]:
+    """Return a float list embedding for text, or None if unavailable."""
+    if not EMBEDDINGS_AVAILABLE:
+        return None
+    result = list(_embed_model.embed([text]))
+    return result[0].tolist()
+
+
+def _pack(vec: list) -> bytes:
+    """Serialise a float list to bytes for SQLite storage."""
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
+def _unpack(blob: bytes) -> list:
+    """Deserialise bytes back to a float list."""
+    n = len(blob) // 4
+    return list(struct.unpack(f"{n}f", blob))
+
+
+# ---------------------------------------------------------------------------
+# Write operations
+# ---------------------------------------------------------------------------
+
+def store_memory(content: str, role: str = "note", source: str = None) -> None:
+    """
+    Store a piece of text as a long-term memory with an embedding.
+
+    content: The text to remember.
+    role:    Label for the memory ('note', 'conversation', 'document').
+    source:  Optional identifier (e.g. URL or filename).
+    """
+    vec = _embed(content)
+    conn = _connect()
+
+    cursor = conn.execute(
+        "INSERT INTO memories (content, role, source) VALUES (?, ?, ?)",
+        (content, role, source),
+    )
+    row_id = cursor.lastrowid
+
+    # Keep FTS index in sync
+    conn.execute(
+        "INSERT INTO memories_fts(rowid, content) VALUES (?, ?)",
+        (row_id, content),
+    )
+
+    if vec is not None:
+        if SQLITE_VEC_AVAILABLE:
+            conn.execute(
+                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
+                (row_id, _pack(vec)),
+            )
+        elif NUMPY_AVAILABLE:
+            conn.execute(
+                "UPDATE memories SET embedding = ? WHERE id = ?",
+                (_pack(vec), row_id),
+            )
+
+    conn.commit()
+    conn.close()
+
+
+def store_conversation(role: str, content: str) -> None:
+    """
+    Append a single turn to the conversation history.
+    role:    'user' or 'assistant'
+    content: The message text.
+    """
+    conn = _connect()
+    conn.execute(
+        "INSERT INTO conversation (role, content) VALUES (?, ?)",
+        (role, content),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Read operations
+# ---------------------------------------------------------------------------
+
+def get_recent(n: int = 15) -> list:
+    """
+    Return the last n conversation turns as a list of dicts.
+    Format: [{"role": "user"/"assistant", "content": "..."}, ...]
+    Suitable for direct use as the messages list in an LLM call.
+    """
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT role, content FROM conversation ORDER BY id DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    conn.close()
+    # Reverse so the oldest turn comes first (correct chronological order for the LLM)
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def search(query: str, n: int = 5) -> list:
+    """
+    Find the n most relevant memories for a query string.
+    Returns a list of dicts with keys: content, role, source, timestamp.
+
+    Search method chosen automatically:
+      1. sqlite-vec KNN  — fastest, if sqlite-vec + fastembed are available
+      2. numpy cosine    — if fastembed available but sqlite-vec is not
+      3. FTS5 full-text  — fallback when embeddings are unavailable
+    """
+    conn = _connect()
+    results = []
+    vec = _embed(query)
+
+    if vec is not None and SQLITE_VEC_AVAILABLE:
+        # KNN vector search via sqlite-vec
+        rows = conn.execute(
+            """
+            SELECT m.content, m.role, m.source, m.timestamp
+            FROM memories m
+            INNER JOIN (
+                SELECT rowid, distance
+                FROM memories_vec
+                WHERE embedding MATCH ?
+                ORDER BY distance
+                LIMIT ?
+            ) v ON m.id = v.rowid
+            ORDER BY v.distance
+            """,
+            (_pack(vec), n),
+        ).fetchall()
+        results = [dict(r) for r in rows]
+
+    elif vec is not None and NUMPY_AVAILABLE:
+        # Load all stored embeddings and compute cosine similarity in Python
+        rows = conn.execute(
+            "SELECT id, content, role, source, timestamp, embedding "
+            "FROM memories WHERE embedding IS NOT NULL"
+        ).fetchall()
+        if rows:
+            query_arr = _np.array(vec)
+            scored = []
+            for row in rows:
+                stored_arr = _np.array(_unpack(row["embedding"]))
+                denom = _np.linalg.norm(query_arr) * _np.linalg.norm(stored_arr)
+                score = float(_np.dot(query_arr, stored_arr) / denom) if denom > 0 else 0.0
+                scored.append((score, dict(row)))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            results = [r for _, r in scored[:n]]
+            # Remove internal fields before returning
+            for r in results:
+                r.pop("embedding", None)
+                r.pop("id", None)
+
+    else:
+        # FTS5 full-text search fallback
+        try:
+            rows = conn.execute(
+                """
+                SELECT m.content, m.role, m.source, m.timestamp
+                FROM memories m
+                INNER JOIN (
+                    SELECT rowid FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?
+                ) f ON m.id = f.rowid
+                """,
+                (query, n),
+            ).fetchall()
+            results = [dict(r) for r in rows]
+        except Exception:
+            # FTS5 query syntax errors (e.g. special characters) are silently ignored
+            results = []
+
+    conn.close()
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Project notes
+# ---------------------------------------------------------------------------
+
+def get_notes(project: str, query: str = None, n: int = 50) -> list:
+    """
+    Retrieve notes for a project.
+
+    If query is given: return notes sorted by semantic similarity to the query.
+    If no query: return all notes for the project, newest first.
+
+    Notes are memories stored with role='note' and source=project.
+    """
+    conn = _connect()
+
+    if query and EMBEDDINGS_AVAILABLE:
+        vec = _embed(query)
+        if vec is not None:
+            if SQLITE_VEC_AVAILABLE:
+                # KNN search across all memories, then filter to this project
+                rows = conn.execute(
+                    """
+                    SELECT m.id, m.content, m.role, m.source, m.timestamp
+                    FROM memories m
+                    INNER JOIN (
+                        SELECT rowid, distance FROM memories_vec
+                        WHERE embedding MATCH ?
+                        ORDER BY distance LIMIT ?
+                    ) v ON m.id = v.rowid
+                    WHERE m.role = 'note' AND lower(m.source) = lower(?)
+                    ORDER BY v.distance
+                    """,
+                    (_pack(vec), min(n * 10, 500), project),
+                ).fetchall()
+                conn.close()
+                return [dict(r) for r in rows[:n]]
+
+            elif NUMPY_AVAILABLE:
+                rows = conn.execute(
+                    "SELECT id, content, role, source, timestamp, embedding "
+                    "FROM memories WHERE role='note' AND lower(source)=lower(?) "
+                    "AND embedding IS NOT NULL ORDER BY timestamp DESC",
+                    (project,),
+                ).fetchall()
+                conn.close()
+                if not rows:
+                    return []
+                query_arr = _np.array(vec)
+                scored = []
+                for row in rows:
+                    stored_arr = _np.array(_unpack(row["embedding"]))
+                    denom = _np.linalg.norm(query_arr) * _np.linalg.norm(stored_arr)
+                    score = float(_np.dot(query_arr, stored_arr) / denom) if denom > 0 else 0.0
+                    scored.append((score, dict(row)))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                results = [r for _, r in scored[:n]]
+                for r in results:
+                    r.pop("embedding", None)
+                return results
+
+    # No query or no embeddings — return all notes chronologically
+    rows = conn.execute(
+        "SELECT id, content, role, source, timestamp FROM memories "
+        "WHERE role='note' AND lower(source)=lower(?) "
+        "ORDER BY timestamp DESC LIMIT ?",
+        (project, n),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_note_projects() -> list:
+    """
+    Return a list of (project, count) tuples for all projects that have notes,
+    sorted by most notes first.
+    """
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT source, COUNT(*) as count FROM memories "
+        "WHERE role='note' AND source IS NOT NULL "
+        "GROUP BY lower(source) ORDER BY count DESC"
+    ).fetchall()
+    conn.close()
+    return [(r["source"], r["count"]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Note mutation helpers
+# ---------------------------------------------------------------------------
+
+def find_notes(text: str, source: str) -> list:
+    """
+    Find notes in a project whose content contains text (case-insensitive).
+    Returns dicts with keys: id, content, timestamp.
+    """
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT id, content, timestamp FROM memories "
+        "WHERE role='note' AND lower(source)=lower(?) "
+        "AND instr(lower(content), lower(?)) > 0",
+        (source, text),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_notes(ids: list) -> None:
+    """
+    Delete notes by ID, keeping FTS and vec indexes in sync.
+    """
+    if not ids:
+        return
+    conn = _connect()
+    for row_id in ids:
+        row = conn.execute(
+            "SELECT content FROM memories WHERE id=?", (row_id,)
+        ).fetchone()
+        if not row:
+            continue
+        # Remove from FTS index
+        try:
+            conn.execute(
+                "INSERT INTO memories_fts(memories_fts, rowid, content) "
+                "VALUES('delete', ?, ?)",
+                (row_id, row["content"]),
+            )
+        except Exception:
+            pass
+        # Remove from vec index
+        if SQLITE_VEC_AVAILABLE:
+            try:
+                conn.execute(
+                    "DELETE FROM memories_vec WHERE rowid=?", (row_id,)
+                )
+            except Exception:
+                pass
+        conn.execute("DELETE FROM memories WHERE id=?", (row_id,))
+    conn.commit()
+    conn.close()
+
+
+def cleanup_done_notes(source: str, older_than_hours: int = 24) -> int:
+    """
+    Delete completed notes (content starts with '[x]') older than the
+    given number of hours. Returns the number of rows deleted.
+    """
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT id, content FROM memories "
+        "WHERE role='note' AND lower(source)=lower(?) "
+        "AND content LIKE '[x]%' "
+        "AND timestamp < datetime('now', ?)",
+        (source, f"-{older_than_hours} hours"),
+    ).fetchall()
+    conn.close()
+
+    delete_notes([r["id"] for r in rows])
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Document ingestion
+# ---------------------------------------------------------------------------
+
+def _chunk_text(text: str, max_words: int = 400) -> list:
+    """Split text into chunks of approximately max_words words."""
+    words = text.split()
+    return [
+        " ".join(words[i : i + max_words])
+        for i in range(0, len(words), max_words)
+        if words[i : i + max_words]
+    ]
+
+
+def ingest_url(url: str) -> str:
+    """
+    Fetch a URL, strip HTML, chunk the text, embed each chunk, and store.
+    Returns a human-readable confirmation string.
+    """
+    try:
+        import requests as _requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return "Error: 'requests' and 'beautifulsoup4' are required. Run: pip install requests beautifulsoup4"
+
+    try:
+        resp = _requests.get(url, timeout=15, headers={"User-Agent": "Pincer/1.0"})
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Remove noisy elements before extracting text
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+    except Exception as e:
+        return f"Error fetching URL: {e}"
+
+    chunks = _chunk_text(text)
+    for chunk in chunks:
+        store_memory(chunk, role="document", source=url)
+
+    return f"Stored {len(chunks)} chunk(s) from: {url}"
+
+
+def ingest_pdf(path: str) -> str:
+    """
+    Extract text from a PDF, chunk, embed, and store.
+    Returns a human-readable confirmation string.
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return "Error: 'pymupdf' is required. Run: pip install pymupdf"
+
+    try:
+        doc = fitz.open(path)
+        pages_text = [page.get_text() for page in doc]
+        doc.close()
+        text = " ".join(pages_text)
+    except Exception as e:
+        return f"Error reading PDF '{path}': {e}"
+
+    source = Path(path).name
+    chunks = _chunk_text(text)
+    for chunk in chunks:
+        store_memory(chunk, role="document", source=source)
+
+    return f"Stored {len(chunks)} chunk(s) from: {source}"

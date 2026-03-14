@@ -1,0 +1,268 @@
+# scheduler.py — Discover and run Tasks from the tasks/ directory
+#
+# Tasks are Python scripts in tasks/*.py with a metadata header block.
+# The scheduler reads the header, registers enabled tasks with the
+# 'schedule' library, and runs them in a background daemon thread.
+#
+# Task metadata header format (at the top of the .py file):
+#
+#   # TASK: Daily Report
+#   # SCHEDULE: every day at 08:00
+#   # ENABLED: false
+#   # DESCRIPTION: Sends a daily usage summary to Telegram
+#
+# Supported SCHEDULE strings:
+#   every day at HH:MM    (e.g. every day at 08:00)
+#   every hour
+#   every N minutes       (e.g. every 30 minutes)
+#   every N seconds       (useful for testing)
+#   on demand             (not scheduled — triggered manually via 'run task:')
+
+import importlib.util
+import json
+import threading
+import time
+from pathlib import Path
+
+try:
+    import schedule
+    SCHEDULE_AVAILABLE = True
+except ImportError:
+    schedule = None
+    SCHEDULE_AVAILABLE = False
+
+TASKS_DIR  = Path(__file__).parent / "tasks"
+STATE_FILE = Path(__file__).parent / "data" / "task_state.json"
+
+# Per-task failure counters — tracks consecutive failures for auto-disable.
+# Keys are task file stems, values are int counts.
+_failure_counts: dict = {}
+_failure_lock = threading.Lock()
+MAX_CONSECUTIVE_FAILURES = 3
+
+
+def _load_state() -> dict:
+    """Load the persisted enabled/disabled state for all tasks."""
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_state(state: dict) -> None:
+    """Persist the task enabled/disabled state."""
+    STATE_FILE.parent.mkdir(exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def discover_tasks() -> list:
+    """
+    Scan tasks/*.py and parse their metadata header.
+    Returns a list of dicts, each with keys:
+        name, schedule, enabled, description, path
+
+    The file header's ENABLED value is the default. Any entry in
+    data/task_state.json overrides it, so enabled state persists
+    independently of git operations.
+    """
+    state = _load_state()
+    tasks = []
+    if not TASKS_DIR.exists():
+        return tasks
+    for path in sorted(TASKS_DIR.glob("*.py")):
+        if path.name.startswith("_"):
+            continue  # skip __init__.py and private files
+
+        meta = {
+            "name":        path.stem,
+            "schedule":    None,
+            "enabled":     True,
+            "description": "",
+            "path":        path,
+        }
+
+        try:
+            with open(path) as f:
+                for line in f:
+                    stripped = line.strip()
+                    # Stop reading once we leave the header comment block
+                    if stripped and not stripped.startswith("#"):
+                        break
+                    # Parse metadata keys
+                    upper = stripped.upper()
+                    if upper.startswith("# TASK:"):
+                        meta["name"] = stripped[7:].strip()
+                    elif upper.startswith("# SCHEDULE:"):
+                        meta["schedule"] = stripped[11:].strip()
+                    elif upper.startswith("# ENABLED:"):
+                        meta["enabled"] = stripped[10:].strip().lower() == "true"
+                    elif upper.startswith("# DESCRIPTION:"):
+                        meta["description"] = stripped[14:].strip()
+        except Exception as e:
+            print(f"[scheduler] Could not read {path.name}: {e}")
+
+        # JSON state overrides the file header
+        stem = path.stem
+        if stem in state:
+            meta["enabled"] = state[stem]
+
+        tasks.append(meta)
+    return tasks
+
+
+def set_task_enabled(stem: str, enabled: bool) -> None:
+    """Persist the enabled state for a task by file stem."""
+    state = _load_state()
+    state[stem] = enabled
+    _save_state(state)
+
+
+def _run_task(path: Path) -> None:
+    """
+    Load a task script and call its run() function.
+    Errors are caught so a broken task doesn't crash the scheduler.
+    Tracks consecutive failures and auto-disables after MAX_CONSECUTIVE_FAILURES.
+    """
+    import sys
+    # Ensure the project root is on sys.path so tasks can import config etc.
+    project_root = str(path.parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    stem   = path.stem
+    spec   = importlib.util.spec_from_file_location("task_module", path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        if hasattr(module, "run"):
+            module.run()
+        else:
+            print(f"[scheduler] {path.name} has no run() function — skipping.")
+        # Reset failure counter on success
+        with _failure_lock:
+            _failure_counts[stem] = 0
+    except Exception as e:
+        msg = f"Task '{stem}' failed: {e}"
+        print(f"[scheduler] {msg}")
+
+        # Track consecutive failures
+        with _failure_lock:
+            _failure_counts[stem] = _failure_counts.get(stem, 0) + 1
+            count = _failure_counts[stem]
+
+        if count >= MAX_CONSECUTIVE_FAILURES:
+            set_task_enabled(stem, False)
+            reload()
+            disable_msg = (
+                f"Task '{stem}' has been automatically disabled after "
+                f"{MAX_CONSECUTIVE_FAILURES} consecutive failures."
+            )
+            print(f"[scheduler] {disable_msg}")
+            try:
+                from notify import send
+                send(f"⚠️ {disable_msg}")
+            except Exception:
+                pass
+        else:
+            try:
+                from notify import send
+                send(f"⚠️ {msg}")
+            except Exception:
+                pass
+
+
+def _register(task: dict) -> bool:
+    """
+    Register a task with the schedule library.
+    Returns True on success, False if the schedule string is unrecognised.
+    """
+    s    = task["schedule"].lower().strip()
+    path = task["path"]
+    name = task["name"]
+
+    try:
+        if "every day at" in s:
+            time_str = s.split("at")[-1].strip()
+            schedule.every().day.at(time_str).do(_run_task, path)
+
+        elif s == "every hour":
+            schedule.every().hour.do(_run_task, path)
+
+        elif "every" in s and "hour" in s:
+            # e.g. "every 2 hours"
+            n = int("".join(c for c in s if c.isdigit()) or "1")
+            schedule.every(n).hours.do(_run_task, path)
+
+        elif "every" in s and "minute" in s:
+            n = int("".join(c for c in s if c.isdigit()) or "1")
+            schedule.every(n).minutes.do(_run_task, path)
+
+        elif "every" in s and "second" in s:
+            n = int("".join(c for c in s if c.isdigit()) or "1")
+            schedule.every(n).seconds.do(_run_task, path)
+
+        elif s == "on demand":
+            # Intentionally not scheduled — triggered manually via 'run task:'
+            print(f"[scheduler] '{name}' is on-demand only (not scheduled).")
+            return False
+
+        else:
+            print(f"[scheduler] Unrecognised schedule for '{name}': {s}")
+            return False
+
+        print(f"[scheduler] Scheduled '{name}': {s}")
+        return True
+
+    except Exception as e:
+        print(f"[scheduler] Failed to register '{name}': {e}")
+        return False
+
+
+def _load_tasks() -> None:
+    """Discover enabled tasks and register them with the schedule library."""
+    tasks   = discover_tasks()
+    enabled = [t for t in tasks if t["enabled"] and t["schedule"]]
+
+    if not enabled:
+        print(f"[scheduler] {len(tasks)} task(s) found, none enabled.")
+    else:
+        registered = sum(1 for t in enabled if _register(t))
+        print(f"[scheduler] {registered}/{len(enabled)} task(s) registered.")
+
+
+def start() -> None:
+    """
+    Discover enabled tasks, register them, and start the scheduler loop
+    in a background daemon thread. Returns immediately.
+    """
+    if not SCHEDULE_AVAILABLE:
+        print("[scheduler] 'schedule' library not installed — tasks disabled. Run: pip install schedule")
+        return
+
+    _load_tasks()
+
+    def _loop():
+        while True:
+            schedule.run_pending()
+            time.sleep(10)
+
+    thread = threading.Thread(target=_loop, daemon=True, name="scheduler")
+    thread.start()
+
+
+def run_task(path: Path) -> None:
+    """Run a task immediately, outside of its schedule. Used by 'run task:' command."""
+    _run_task(path)
+
+
+def reload() -> None:
+    """
+    Re-discover tasks and re-register them without restarting the agent.
+    Called after enable task: / disable task: commands.
+    """
+    if not SCHEDULE_AVAILABLE:
+        return
+    schedule.clear()
+    _load_tasks()

@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Runtime data
+data/memory.db
+data/usage.log
+data/task_state.json
+data/backups/
+
+# Voice message temp files
+data/*.ogg
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
