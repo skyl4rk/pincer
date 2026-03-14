@@ -34,16 +34,15 @@ An AI assistant for the Raspberry Pi 4, forked from MolluskAI. Pincer extends th
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/skyl4rk/pincer.git ~/pincer
-cd ~/pincer
+wget https://raw.githubusercontent.com/skyl4rk/pincer/main/install.sh
+chmod +x install.sh && ./install.sh
+```
 
-python -m venv venv
-source venv/bin/activate
+The installer clones the repo, creates a virtual environment, and installs all dependencies.
 
-pip install -r https://raw.githubusercontent.com/skyl4rk/pincer/main/requirements.txt
+For voice message support (optional):
 
-# For voice message support (optional):
+```bash
 sudo apt install ffmpeg
 ```
 
