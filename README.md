@@ -85,8 +85,8 @@ Description=Pincer Agent
 After=network.target
 
 [Service]
-WorkingDirectory=/home/historian/pincer
-ExecStart=/home/historian/pincer/venv/bin/python agent.py --no-terminal
+WorkingDirectory=/home/YOUR_USERNAME/pincer
+ExecStart=/home/YOUR_USERNAME/pincer/venv/bin/python agent.py --no-terminal
 Restart=on-failure
 RestartSec=10
 
