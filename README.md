@@ -288,6 +288,9 @@ TELEGRAM_TOKEN=your-bot-token
 TELEGRAM_ALLOWED_USERS=123456789
 TELEGRAM_CHAT_ID=123456789
 
+# Weather task (latitude, longitude)
+WEATHER_LOCATION=40.7128, -74.0060
+
 # Email gateway (optional — leave blank to disable)
 EMAIL_IMAP_HOST=
 EMAIL_SMTP_HOST=
