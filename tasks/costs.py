@@ -1,5 +1,5 @@
-# TASK: Daily Cost Report
-# SCHEDULE: every day at 08:00
+# TASK: costs
+# SCHEDULE: every day at 05:30
 # ENABLED: false
 # DESCRIPTION: Reads data/usage.log and sends a daily token usage summary via Telegram
 

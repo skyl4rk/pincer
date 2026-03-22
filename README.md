@@ -69,7 +69,8 @@ python agent.py
 # Headless — Telegram only, no terminal
 python agent.py --no-terminal
 
-# Attach a second terminal to a running headless instance
+# If Pincer is already running and you are using it via Telegram,
+# you can also open a terminal session at the same time
 python agent.py --terminal
 ```
 
@@ -77,7 +78,13 @@ python agent.py --terminal
 
 ## Running as a System Service
 
-Create `~/.config/systemd/user/pincer.service`:
+First, create the required directories if they don't already exist:
+
+```bash
+mkdir -p ~/.config/systemd/user
+```
+
+Then create `~/.config/systemd/user/pincer.service`:
 
 ```ini
 [Unit]
@@ -290,6 +297,18 @@ Switch model at runtime without restarting:
 ```
 model: anthropic/claude-3-5-haiku
 ```
+
+---
+
+## Recommended Workflow
+
+It is recommended to use [Claude Code](https://github.com/anthropics/claude-code) in parallel with Pincer to create, modify, and debug tasks and agents. Claude Code provides a powerful terminal-based interface for working directly with the project files.
+
+### Using OpenClaw Skills with Pincer
+
+[OpenClaw](https://github.com/openclaw/openclaw) has a large community skill ecosystem with over 13,000 skills available on the [ClawHub registry](https://clawhub.ai). OpenClaw skills are markdown files that instruct the AI how to behave in a specific domain — the same concept as Pincer skills.
+
+You can adapt any OpenClaw skill for Pincer by downloading the `SKILL.md` file and asking Claude Code to convert it into a Pincer skill (stripping the OpenClaw-specific frontmatter and saving it to `skills/`).
 
 ---
 

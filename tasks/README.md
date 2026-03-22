@@ -2,6 +2,10 @@
 
 Python scripts in this directory are discovered automatically by the scheduler.
 
+## Naming tasks
+
+Use short, single-word names for task files (e.g. `weather.py`, `costs.py`). Avoid underscores and multi-word names — task names are typed directly into Telegram commands on a phone, and shorter names are much easier to type.
+
 ## Metadata header
 
 Each task file should start with a header block:
@@ -25,7 +29,7 @@ Each task file should start with a header block:
 
 Tasks default to `ENABLED: false`. Enable via the agent:
 ```
-enable task: df_report
+enable task: disk
 ```
 Or edit the file header and restart.
 

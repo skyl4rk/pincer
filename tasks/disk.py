@@ -1,4 +1,4 @@
-# TASK: Disk Free Report
+# TASK: disk
 # SCHEDULE: on demand
 # ENABLED: true
 # DESCRIPTION: Reports disk usage for the root filesystem
