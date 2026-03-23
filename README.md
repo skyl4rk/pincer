@@ -133,6 +133,8 @@ create agent: <name> Create a new subagent with AI assistance
 
 model                Show current model
 model: <model-id>    Switch model instantly (saved to .env)
+run task: models     Show last 5 unique models used (most recent first)
+models: <N>          Switch to model N from that list (e.g. models: 2)
 
 todo: <item>         Add to to-do list
 done: <item or N>    Mark item done
@@ -299,6 +301,12 @@ EMAIL_SMTP_HOST=
 Switch model at runtime without restarting:
 ```
 model: anthropic/claude-3-5-haiku
+```
+
+View and switch between recently used models:
+```
+run task: models     # lists last 5 unique models with numbers
+models: 2            # switches to the 2nd model in that list
 ```
 
 ---
