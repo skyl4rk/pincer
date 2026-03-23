@@ -117,6 +117,9 @@ def set_task_enabled(stem: str, enabled: bool) -> None:
     state = _load_state()
     state[stem] = enabled
     _save_state(state)
+    if enabled:
+        with _failure_lock:
+            _failure_counts[stem] = 0
 
 
 def _run_task(path: Path) -> None:

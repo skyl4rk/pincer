@@ -1,6 +1,6 @@
 # TASK: stoic
 # SCHEDULE: every day at 05:00
-# ENABLED: false
+# ENABLED: true
 # DESCRIPTION: Sends a unique Stoic quote to Telegram each morning
 
 import sys
@@ -30,7 +30,8 @@ def send_telegram_message(bot_token, chat_id, message):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     params = {
         "chat_id": chat_id,
-        "text": message    }
+        "text": message
+    }
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
@@ -40,18 +41,18 @@ def send_telegram_message(bot_token, chat_id, message):
         return False
 
 def run():
-    # Get Telegram credentials from config (ensure these are set in .env)
-    bot_token = config.TELEGRAM_BOT_TOKEN
+    print("Starting stoic task...")
+    bot_token = config.TELEGRAM_TOKEN
     chat_id = config.TELEGRAM_CHAT_ID
 
-    # Select a random unique quote
     quote = random.choice(STOIC_QUOTES)
 
-    # Send the quote
-    success = send_telegram_message(bot_token, chat_id,
-        f"🧘 Daily Stoic Wisdom 🧘\n\n{quote}")
+    success = send_telegram_message(bot_token, chat_id, f"🧘 Daily Stoic Wisdom 🧘\n\n{quote}")
 
     if success:
         print(f"Sent Stoic quote: {quote}")
     else:
         print("Failed to send Stoic quote")
+
+if __name__ == "__main__":
+    run()
