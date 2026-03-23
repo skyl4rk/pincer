@@ -201,6 +201,26 @@ def handle_message(text: str, reply_fn, source: str = "terminal") -> None:
         reply_fn(f"Model changed to: {model_id}\nSaved to .env — no restart needed.")
         return
 
+    if lower.startswith("models:"):
+        import config
+        from tasks.models import recent_models
+        arg = text[7:].strip()
+        if not arg.isdigit():
+            reply_fn("Usage: models: <number>  (e.g. models: 2)\nRun 'run task: models' to see the list.")
+            return
+        n = int(arg)
+        models = recent_models()
+        if not models:
+            reply_fn("No model usage recorded yet.")
+            return
+        if n < 1 or n > len(models):
+            reply_fn(f"Pick a number between 1 and {len(models)}.")
+            return
+        model_id = models[n - 1]
+        config.set_model(model_id)
+        reply_fn(f"Model changed to: {model_id}\nSaved to .env — no restart needed.")
+        return
+
     if lower == "notes":
         reply_fn(_list_note_projects())
         return
