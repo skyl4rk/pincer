@@ -11,6 +11,7 @@ An AI assistant for the Raspberry Pi 4, forked from MolluskAI. Pincer extends th
 - **Self-repair** — run a broken task, capture the error, and ask the AI to fix it
 - **Scheduled tasks** — Python scripts that run automatically without using AI credits
 - **Skill templates** — markdown files that shape how the AI responds
+- **Self-improvement** — corrections, errors, and discoveries are logged to `.learnings/` and reviewed before major tasks; broadly applicable learnings can be promoted to `RULES.MD`
 - **Dynamic subagents** — add a directory to `agents/` and it's immediately available
 - **Intelligent orchestrator** — routes questions to the right specialist agents
 - **Vector memory** — all conversations are stored and semantically searchable
