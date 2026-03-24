@@ -83,6 +83,60 @@ def get_models() -> list:
         return config.POPULAR_MODELS
 
 
+def get_free_models() -> list:
+    """
+    Fetch all free models from OpenRouter and return them ranked by quality.
+
+    A model is considered free if both pricing.prompt and pricing.completion
+    are "0", or if the model ID ends in ':free'.
+
+    Ranking score = (param_billions * 1000) + (context_length / 1000)
+    Parameter count is extracted from the model ID/name (e.g. '70b' -> 70).
+
+    Returns a list of dicts sorted by score descending:
+      [{"id": ..., "score": ..., "params_b": ..., "context_length": ...}, ...]
+    """
+    import re
+
+    headers = {"Authorization": f"Bearer {config.OPENROUTER_API_KEY}"}
+    response = requests.get(
+        f"{OPENROUTER_BASE}/models",
+        headers=headers,
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    ranked = []
+    for m in data.get("data", []):
+        model_id = m.get("id", "")
+        pricing = m.get("pricing", {})
+        is_free = (
+            (str(pricing.get("prompt", "1")) == "0" and str(pricing.get("completion", "1")) == "0")
+            or model_id.endswith(":free")
+        )
+        if not is_free:
+            continue
+
+        context_length = m.get("context_length", 0) or 0
+
+        # Extract parameter count in billions from model ID or name
+        search_str = model_id + " " + m.get("name", "")
+        param_match = re.search(r'(\d+(?:\.\d+)?)b', search_str, re.IGNORECASE)
+        params_b = float(param_match.group(1)) if param_match else 0.0
+
+        score = (params_b * 1000) + (context_length / 1000)
+        ranked.append({
+            "id": model_id,
+            "score": round(score, 1),
+            "params_b": params_b,
+            "context_length": context_length,
+        })
+
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return ranked
+
+
 def _log_usage(usage: dict) -> None:
     """Append a usage line to data/usage.log."""
     USAGE_LOG.parent.mkdir(exist_ok=True)

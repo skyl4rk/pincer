@@ -196,6 +196,35 @@ def handle_message(text: str, reply_fn, source: str = "terminal") -> None:
             import config
             reply_fn(f"Current model: {config.OPENROUTER_MODEL}\nUsage: model: <model-id>")
             return
+        if model_id.lower() in ("freeride", "freeride -rank"):
+            import json
+            from pathlib import Path
+            from tasks.freeride import format_ranking, run as freeride_run
+            freeride_data = Path(__file__).parent / "data" / "freeride.json"
+            if not freeride_data.exists():
+                reply_fn("[freeride] No rankings cached yet — fetching now...")
+                freeride_run()
+            if not freeride_data.exists():
+                reply_fn("[freeride] Failed to fetch free models. Check your connection.")
+                return
+            try:
+                data = json.loads(freeride_data.read_text())
+                models = data["models"]
+                if model_id.lower() == "freeride -rank":
+                    reply_fn(format_ranking(models))
+                else:
+                    import config
+                    top = models[0]
+                    config.set_model(top["id"])
+                    ctx_k = top["context_length"] // 1000 if top["context_length"] else "?"
+                    reply_fn(
+                        f"Freeride: switched to {top['id']}\n"
+                        f"Score: {top['score']}  |  {top['params_b']}b params  |  {ctx_k}k context\n"
+                        f"Saved to .env — no restart needed."
+                    )
+            except Exception as e:
+                reply_fn(f"[freeride] Could not read rankings: {e}")
+            return
         import config
         config.set_model(model_id)
         reply_fn(f"Model changed to: {model_id}\nSaved to .env — no restart needed.")
