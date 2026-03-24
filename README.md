@@ -318,6 +318,22 @@ Reload with `disable task: grocery` then `enable task: grocery`.
 
 ---
 
+## Built-in Tasks
+
+| Task | Command | Description |
+|------|---------|-------------|
+| `freeride` | `run task: freeride` | Fetch and rank free models from OpenRouter; update the cache |
+| `restart` | `run task: restart` | Restart the pincer systemd service |
+| `reboot` | `run task: reboot` | Reboot the device |
+| `models` | `run task: models` | Show the last 5 unique models used |
+| `costs` | `run task: costs` | Send a 7-day token usage and cost summary |
+| `weather` | `run task: weather` | Send a 3-day weather forecast |
+| `disk` | `run task: disk` | Report disk usage for the root filesystem |
+
+All tasks above are `on demand` except `freeride` (every 6 hours) and `costs`/`weather` (daily). Enable scheduled tasks with `enable task: <name>`.
+
+---
+
 ## Adding a Task
 
 Ask Pincer to write one:
