@@ -134,8 +134,8 @@ create agent: <name> Create a new subagent with AI assistance
 
 model                Show current model
 model: <model-id>    Switch model instantly (saved to .env)
-model: freeride      Switch to the best available free model
-model: freeride -rank  Show the top 10 ranked free models
+model: freeride      Show the top 10 ranked free models
+model: freeride N    Switch to model N from that list (e.g. model: freeride 2)
 run task: models     Show last 5 unique models used (most recent first)
 models: <N>          Switch to model N from that list (e.g. models: 2)
 
@@ -445,14 +445,14 @@ run task: models     # lists last 5 unique models with numbers
 models: 2            # switches to the 2nd model in that list
 ```
 
-Use the best free model automatically with **freeride**:
+Browse and select free models with **freeride**:
 ```
-model: freeride        # switch to the top-ranked free model
-model: freeride -rank  # list the top 10 free models without switching
+model: freeride        # show the top 10 ranked free models
+model: freeride 2      # switch to model #2 from that list
 run task: freeride     # re-fetch rankings from OpenRouter and update the cache
 ```
 
-Freeride ranks free models by parameter count (primary) and context length (secondary), and refreshes the list every 6 hours in the background. You are only notified if the top-ranked model changes.
+Freeride ranks free models by parameter count (primary) and context length (secondary), and refreshes the list every 6 hours in the background. You are only notified if the top-ranked model changes. When a free model is selected, the previous non-free model is saved as a fallback — if the free model fails, Pincer automatically retries with the fallback and notifies you via Telegram.
 
 ---
 
