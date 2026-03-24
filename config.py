@@ -15,8 +15,9 @@ ENV_FILE = Path(__file__).parent / ".env"
 load_dotenv(ENV_FILE)
 
 # --- Required settings ---
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+OPENROUTER_API_KEY      = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL        = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+OPENROUTER_FALLBACK_MODEL = os.getenv("OPENROUTER_FALLBACK_MODEL", "google/gemini-2.0-flash-001")
 
 # --- Weather settings ---
 WEATHER_LOCATION = os.getenv("WEATHER_LOCATION", "")
@@ -64,24 +65,35 @@ POPULAR_MODELS = [
 ]
 
 
+def _write_env_key(key: str, value: str) -> None:
+    """Write or update a single key in the .env file."""
+    import re
+    if not ENV_FILE.exists():
+        return
+    content = ENV_FILE.read_text()
+    new_content = re.sub(
+        rf'^{key}=.*$',
+        f'{key}={value}',
+        content,
+        flags=re.MULTILINE,
+    )
+    if new_content == content:
+        new_content = content.rstrip() + f'\n{key}={value}\n'
+    ENV_FILE.write_text(new_content)
+
+
 def set_model(model_id: str) -> None:
     """Update OPENROUTER_MODEL in memory and persist the change to .env."""
     global OPENROUTER_MODEL
     OPENROUTER_MODEL = model_id
+    _write_env_key("OPENROUTER_MODEL", model_id)
 
-    if ENV_FILE.exists():
-        import re
-        content = ENV_FILE.read_text()
-        new_content = re.sub(
-            r'^OPENROUTER_MODEL=.*$',
-            f'OPENROUTER_MODEL={model_id}',
-            content,
-            flags=re.MULTILINE,
-        )
-        if new_content == content:
-            # Line not present — append it
-            new_content = content.rstrip() + f'\nOPENROUTER_MODEL={model_id}\n'
-        ENV_FILE.write_text(new_content)
+
+def set_fallback_model(model_id: str) -> None:
+    """Update OPENROUTER_FALLBACK_MODEL in memory and persist the change to .env."""
+    global OPENROUTER_FALLBACK_MODEL
+    OPENROUTER_FALLBACK_MODEL = model_id
+    _write_env_key("OPENROUTER_FALLBACK_MODEL", model_id)
 
 
 def is_configured() -> bool:

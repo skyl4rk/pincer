@@ -19,15 +19,8 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 USAGE_LOG = Path(__file__).parent / "data" / "usage.log"
 
 
-def chat(messages: list, system_prompt: str) -> str:
-    """
-    Send a conversation to OpenRouter and return the assistant's reply text.
-
-    messages:      List of {"role": "user"/"assistant"/"system", "content": "..."}
-                   These form the conversation history passed to the model.
-    system_prompt: The system prompt string (identity + skills). Sent as the
-                   first message with role 'system'.
-    """
+def _chat_with_model(model: str, messages: list, system_prompt: str) -> str:
+    """Send a conversation to OpenRouter using a specific model ID."""
     headers = {
         "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -36,7 +29,7 @@ def chat(messages: list, system_prompt: str) -> str:
     }
 
     body = {
-        "model": config.OPENROUTER_MODEL,
+        "model": model,
         # Prepend the system prompt as the first message
         "messages": [{"role": "system", "content": system_prompt}] + messages,
         # middle-out: if context exceeds the model's window, OpenRouter trims
@@ -60,6 +53,30 @@ def chat(messages: list, system_prompt: str) -> str:
     _log_usage(data.get("usage", {}))
 
     return reply
+
+
+def chat(messages: list, system_prompt: str) -> str:
+    """
+    Send a conversation to OpenRouter and return the assistant's reply text.
+
+    messages:      List of {"role": "user"/"assistant"/"system", "content": "..."}
+                   These form the conversation history passed to the model.
+    system_prompt: The system prompt string (identity + skills). Sent as the
+                   first message with role 'system'.
+
+    If the active model is a free model and it fails, automatically falls back
+    to config.OPENROUTER_FALLBACK_MODEL and notifies via Telegram.
+    """
+    model = config.OPENROUTER_MODEL
+    try:
+        return _chat_with_model(model, messages, system_prompt)
+    except Exception as e:
+        fallback = config.OPENROUTER_FALLBACK_MODEL
+        if model.endswith(":free") and fallback and fallback != model:
+            from notify import send
+            send(f"[llm] Free model {model} failed ({e}). Falling back to {fallback}.")
+            return _chat_with_model(fallback, messages, system_prompt)
+        raise
 
 
 def get_models() -> list:

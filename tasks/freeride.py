@@ -29,7 +29,7 @@ def format_ranking(models: list, n: int = 10) -> str:
         ctx_k = m["context_length"] // 1000 if m["context_length"] else "?"
         params = f"{m['params_b']}b" if m["params_b"] else "?"
         lines.append(f"  [{i}] {m['id']}  ({params}, {ctx_k}k ctx)")
-    lines.append(f"\nTo use the best: model: freeride")
+    lines.append(f"\nTo select: model: freeride <number>")
     return "\n".join(lines)
 
 

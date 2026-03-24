@@ -196,8 +196,10 @@ def handle_message(text: str, reply_fn, source: str = "terminal") -> None:
             import config
             reply_fn(f"Current model: {config.OPENROUTER_MODEL}\nUsage: model: <model-id>")
             return
-        if model_id.lower() in ("freeride", "freeride -rank"):
+        lower_model = model_id.lower()
+        if lower_model == "freeride" or lower_model.startswith("freeride "):
             import json
+            import config
             from pathlib import Path
             from tasks.freeride import format_ranking, run as freeride_run
             freeride_data = Path(__file__).parent / "data" / "freeride.json"
@@ -210,18 +212,28 @@ def handle_message(text: str, reply_fn, source: str = "terminal") -> None:
             try:
                 data = json.loads(freeride_data.read_text())
                 models = data["models"]
-                if model_id.lower() == "freeride -rank":
-                    reply_fn(format_ranking(models))
-                else:
-                    import config
-                    top = models[0]
-                    config.set_model(top["id"])
-                    ctx_k = top["context_length"] // 1000 if top["context_length"] else "?"
+                # Parse optional numeric choice: "freeride 3"
+                suffix = model_id[8:].strip()  # everything after "freeride"
+                if suffix.isdigit():
+                    pick = int(suffix) - 1
+                    if pick < 0 or pick >= len(models):
+                        reply_fn(f"[freeride] Invalid selection — choose 1–{len(models)}.")
+                        return
+                    chosen = models[pick]
+                    # Save current model as fallback if it's not a free model
+                    if not config.OPENROUTER_MODEL.endswith(":free"):
+                        config.set_fallback_model(config.OPENROUTER_MODEL)
+                    config.set_model(chosen["id"])
+                    ctx_k = chosen["context_length"] // 1000 if chosen["context_length"] else "?"
                     reply_fn(
-                        f"Freeride: switched to {top['id']}\n"
-                        f"Score: {top['score']}  |  {top['params_b']}b params  |  {ctx_k}k context\n"
-                        f"Saved to .env — no restart needed."
+                        f"Freeride: switched to {chosen['id']}\n"
+                        f"Score: {chosen['score']}  |  {chosen['params_b']}b params  |  {ctx_k}k context\n"
+                        f"Saved to .env — no restart needed.\n"
+                        f"Fallback: {config.OPENROUTER_FALLBACK_MODEL}"
                     )
+                else:
+                    # No number — show the ranked list for the user to choose
+                    reply_fn(format_ranking(models))
             except Exception as e:
                 reply_fn(f"[freeride] Could not read rankings: {e}")
             return
