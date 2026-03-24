@@ -318,19 +318,63 @@ Reload with `disable task: grocery` then `enable task: grocery`.
 
 ---
 
+## Property Search
+
+Pincer can run a daily Zillow search for land listings near a configured zip code, filtered by price and minimum acreage, and send the results to Telegram.
+
+### Setup
+
+Add your zip codes to `.env` (never committed to version control):
+
+```env
+PROPERTY_ZIP=40330
+PROPERTY_NEARBY_ZIPS=40336,40337,40040
+```
+
+`PROPERTY_ZIP` is the primary search zip. `PROPERTY_NEARBY_ZIPS` is optional — add surrounding zip codes to widen the search area.
+
+Then enable the task:
+
+```
+enable task: property
+```
+
+### Changing search parameters
+
+Ask Pincer in Telegram:
+
+```
+change property max price to $30,000
+set property minimum acres to 1
+show 5 property results instead of 10
+```
+
+| Parameter | Variable | Default | Description |
+|-----------|----------|---------|-------------|
+| Zip code | `PROPERTY_ZIP` in `.env` | — | Primary zip code (required) |
+| Nearby zips | `PROPERTY_NEARBY_ZIPS` in `.env` | — | Extra zip codes to search (comma-separated, optional) |
+| Max price | `MAX_PRICE` in `tasks/property.py` | $20,000 | Maximum listing price |
+| Min acreage | `MIN_ACRES` in `tasks/property.py` | 0.4 | Minimum lot size in acres |
+| Max results | `MAX_RESULTS` in `tasks/property.py` | 10 | Number of listings to show |
+
+---
+
 ## Built-in Tasks
 
-| Task | Command | Description |
-|------|---------|-------------|
-| `freeride` | `run task: freeride` | Fetch and rank free models from OpenRouter; update the cache |
-| `restart` | `run task: restart` | Restart the pincer systemd service |
-| `reboot` | `run task: reboot` | Reboot the device |
-| `models` | `run task: models` | Show the last 5 unique models used |
-| `costs` | `run task: costs` | Send a 7-day token usage and cost summary |
-| `weather` | `run task: weather` | Send a 3-day weather forecast |
-| `disk` | `run task: disk` | Report disk usage for the root filesystem |
+| Task | Schedule | Description |
+|------|----------|-------------|
+| `freeride` | every 6 hours | Fetch and rank free models from OpenRouter; update the cache |
+| `stoic` | daily at 05:00 | Send a Stoic quote to Telegram each morning |
+| `costs` | daily at 05:30 | Send a 7-day token usage and cost summary |
+| `weather` | daily at 05:45 | Send a 3-day NOAA weather forecast (requires `WEATHER_LOCATION` in `.env`) |
+| `property` | daily at 05:45 | Search Zillow for land listings near a configured zip code (requires `PROPERTY_ZIP` in `.env` — see [Property Search](#property-search)) |
+| `restart` | on demand | Restart the pincer systemd service |
+| `reboot` | on demand | Reboot the device |
+| `models` | on demand | Show the last 5 unique models used |
+| `disk` | on demand | Report disk usage for the root filesystem |
+| `grocery` | on demand | Generate an Aldi shopping cart via Instacart (see [Grocery Ordering](#grocery-ordering-aldi--instacart)) |
 
-All tasks above are `on demand` except `freeride` (every 6 hours) and `costs`/`weather` (daily). Enable scheduled tasks with `enable task: <name>`.
+Scheduled tasks run automatically but default to `ENABLED: false`. Enable with `enable task: <name>`.
 
 ---
 
@@ -375,6 +419,10 @@ TELEGRAM_CHAT_ID=123456789
 
 # Weather task (latitude, longitude)
 WEATHER_LOCATION=40.7128, -74.0060
+
+# Property task — zip codes are kept out of source code for privacy
+PROPERTY_ZIP=40330
+PROPERTY_NEARBY_ZIPS=40336,40337,40040
 
 # Grocery task — Instacart Developer Platform
 # Register at: https://www.instacart.com/developer
