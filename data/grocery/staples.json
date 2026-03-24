@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "store_preference": "aldi",
+  "auto_promote_threshold": 3,
+  "staples": [
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "whole milk",
+      "category": "dairy",
+      "quantity": 1,
+      "unit": "gallon",
+      "frequency": "weekly",
+      "last_ordered": null,
+      "order_count": 0,
+      "source": "manual",
+      "active": true,
+      "notes": "",
+      "instacart_product_id": null
+    },
+    {
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "eggs",
+      "category": "dairy",
+      "quantity": 1,
+      "unit": "dozen",
+      "frequency": "weekly",
+      "last_ordered": null,
+      "order_count": 0,
+      "source": "manual",
+      "active": true,
+      "notes": "",
+      "instacart_product_id": null
+    },
+    {
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "sourdough bread",
+      "category": "bakery",
+      "quantity": 1,
+      "unit": "loaf",
+      "frequency": "weekly",
+      "last_ordered": null,
+      "order_count": 0,
+      "source": "manual",
+      "active": true,
+      "notes": "",
+      "instacart_product_id": null
+    }
+  ]
+}

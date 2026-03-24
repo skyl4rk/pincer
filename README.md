@@ -252,6 +252,70 @@ create agent: researcher
 
 ---
 
+## Grocery Ordering (Aldi + Instacart)
+
+Pincer can manage your weekly grocery shopping — maintaining a staples list, generating orders, and sending an Instacart checkout link directly to Telegram. You click the link to review and pay; no payment details are ever stored.
+
+### How it works
+
+- A staples list in `data/grocery/staples.json` records everything you regularly buy, with frequency (weekly, biweekly, monthly) and category.
+- On demand (or on a schedule), Pincer builds a cart from your staples and sends an Instacart checkout URL to Telegram. Weekly runs include weekly and due biweekly items; monthly runs (first 3 days of the month) include everything.
+- The AI skill (`skills/grocery_ordering.md`) handles natural-language interactions — adding items, removing them, changing quantities, and parsing receipts — all through normal conversation.
+
+### Setup
+
+1. Register for an Instacart Developer API key at [instacart.com/developer](https://www.instacart.com/developer).
+2. Browse to your local Aldi on instacart.com and note the numeric store ID from the URL.
+3. Add both to `.env`:
+   ```env
+   INSTACART_API_KEY=your_key_here
+   ALDI_INSTACART_STORE_ID=your_store_id
+   ```
+4. Enable the task:
+   ```
+   enable task: grocery
+   ```
+
+### Conversation examples
+
+Just talk to Pincer naturally via Telegram or terminal:
+
+```
+"add oat milk to my staples"
+"remove yogurt from my list"
+"change bread to biweekly"
+"show my staples"
+"order groceries"             ← shows the list, then sends the cart link on confirmation
+"run task: grocery"           ← triggers immediately without confirmation
+```
+
+Paste or forward an Instacart receipt and Pincer will detect the items and ask which to add to your staples.
+
+### Learning over time
+
+Pincer builds up your staples list through four methods:
+
+| Method | How it works |
+|--------|-------------|
+| **Manual** | "add X to my staples" — added immediately |
+| **Order history** | Paste a receipt — Pincer detects items and asks which to save |
+| **Conversational** | 24 hours after an order, Pincer asks how it went and updates the list based on your reply |
+| **Frequency tracking** | Items you request ad-hoc 3+ times in 30 days are automatically promoted to staples |
+
+### Scheduling
+
+To receive your shopping list automatically every week:
+```
+enable task: grocery
+```
+Then edit `tasks/grocery.py` and change the `SCHEDULE` header to (for example):
+```python
+# SCHEDULE: every monday at 08:00
+```
+Reload with `disable task: grocery` then `enable task: grocery`.
+
+---
+
 ## Adding a Task
 
 Ask Pincer to write one:
@@ -293,6 +357,11 @@ TELEGRAM_CHAT_ID=123456789
 
 # Weather task (latitude, longitude)
 WEATHER_LOCATION=40.7128, -74.0060
+
+# Grocery task — Instacart Developer Platform
+# Register at: https://www.instacart.com/developer
+INSTACART_API_KEY=
+ALDI_INSTACART_STORE_ID=
 
 # Email gateway (optional — leave blank to disable)
 EMAIL_IMAP_HOST=
