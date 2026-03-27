@@ -256,6 +256,7 @@ create agent: researcher
 
 ## Grocery Ordering (Aldi + Instacart)
 
+Warning: this task is untested, use with caution!
 Pincer can manage your weekly grocery shopping — maintaining a staples list, generating orders, and sending an Instacart checkout link directly to Telegram. You click the link to review and pay; no payment details are ever stored.
 
 ### How it works
